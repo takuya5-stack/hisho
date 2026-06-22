@@ -73,6 +73,12 @@
     font-size:14px;cursor:pointer;flex:0 0 auto;font-weight:600;
   }
   .send:disabled{opacity:.4;cursor:default}
+  .attach{background:#fff;border:1px solid var(--line);border-radius:12px;height:44px;width:44px;font-size:18px;cursor:pointer;flex:0 0 auto}
+  .attach:active{background:var(--me)}
+  .img-preview{display:flex;align-items:center;gap:8px;margin:0 2px 8px}
+  .img-preview img{height:54px;width:54px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
+  .img-preview button{border:none;background:var(--me);border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:12px;flex:0 0 auto}
+  .msg img{max-width:200px;width:100%;border-radius:10px;display:block}
   .hint{font-size:11.5px;color:var(--sub);margin:6px 2px 0}
   /* 設定モーダル */
   .mask{position:fixed;inset:0;background:rgba(40,35,28,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:50}
@@ -125,11 +131,17 @@
     </div>
     <div class="msgs" id="msgs"></div>
     <div class="composer">
+      <div id="imgPreview" class="img-preview" style="display:none">
+        <img id="imgThumb" alt="添付画像">
+        <button id="imgRemove" title="取り消し">✕</button>
+      </div>
       <div class="row">
+        <button class="attach" id="attach" title="画像を添付">🖼</button>
         <textarea id="input" placeholder="例：明日15時に田中さんと面談、資料準備"></textarea>
         <button class="send" id="send">送信</button>
       </div>
-      <div class="hint">話し言葉でOK。「今日どうしたら？」で段取り相談に乗ります。</div>
+      <input id="fileInput" type="file" accept="image/*" style="display:none">
+      <div class="hint">話し言葉でOK。写真🖼からタスク抽出も。「今日どうしたら？」で相談。</div>
     </div>
   </section>
 </div>
@@ -399,14 +411,15 @@ ${evCtx}
 - ★曖昧な入力（「来週あたり」「夕方」「近いうち」など日時が特定できない）は、勝手に確定させず actions を空配列にして、reply で1点だけ聞き返す。
 - 完了/削除はユーザーが明確にそう言った時のみ。対象は上記idから選ぶ。該当が曖昧なら聞き返す。
 - 「今日どうしたら」等の相談は actions を空にし、現在の予定・タスクを踏まえて優先順位を助言する。
+- ★画像が添付されたら、その内容（プリント・お便り・手書きメモ・ホワイトボード・予定表の写真など）を読み取り、含まれるタスク・予定を抽出して add_task / add_event にする。日付に年が無ければ現在日時の年を補う。画像から日時が特定できない項目は確定させず、reply でまとめて聞き返す。何を抽出したかを reply で簡潔に列挙する。
 - reply は常に日本語。JSON以外は一切出力しない。`;
 }
 
-async function callClaude(userText, history){
+async function callClaude(content, history){
   const body={
     model:MODEL, max_tokens:1024,
     system:systemPrompt(),
-    messages:[...history, {role:"user",content:userText}],
+    messages:[...history, {role:"user",content}],
   };
   const res=await fetch("https://api.anthropic.com/v1/messages",{
     method:"POST",
@@ -450,20 +463,59 @@ async function applyActions(actions){
 /* ====== 会話制御 ====== */
 const history=[]; // Claudeに渡す会話履歴（軽量）
 let busy=false;
+let pendingImage=null; // {dataUrl, mediaType, base64}
 const inputEl=document.getElementById("input");
 const sendEl=document.getElementById("send");
 
+/* 画像を縮小してbase64化（通信量を抑える）*/
+function fileToImage(file){
+  return new Promise((resolve,reject)=>{
+    const r=new FileReader();
+    r.onload=()=>{ const im=new Image(); im.onload=()=>resolve(im); im.onerror=reject; im.src=r.result; };
+    r.onerror=reject; r.readAsDataURL(file);
+  });
+}
+async function processImageFile(file){
+  const img=await fileToImage(file);
+  const max=1568; let w=img.width, h=img.height;
+  const scale=Math.min(1, max/Math.max(w,h));
+  w=Math.round(w*scale); h=Math.round(h*scale);
+  const c=document.createElement("canvas"); c.width=w; c.height=h;
+  c.getContext("2d").drawImage(img,0,0,w,h);
+  const dataUrl=c.toDataURL("image/jpeg",0.85);
+  return {dataUrl, mediaType:"image/jpeg", base64:dataUrl.split(",")[1]};
+}
+function clearImage(){ pendingImage=null; document.getElementById("imgPreview").style.display="none"; document.getElementById("imgThumb").src=""; }
+
 async function handleSend(){
   const text=inputEl.value.trim();
-  if(!text||busy) return;
+  if((!text && !pendingImage)||busy) return;
   if(!cfg.claudeKey){ openSettings(); bubble("先にClaude APIキーを設定してください（⚙︎）。","sys"); return; }
 
-  bubble(text,"me");
+  // 自分の発言を表示（画像があればサムネ付き）
+  if(pendingImage){
+    const d=bubble("","me");
+    const im=document.createElement("img"); im.src=pendingImage.dataUrl; d.appendChild(im);
+    if(text){ const p=document.createElement("div"); p.style.marginTop="6px"; p.textContent=text; d.appendChild(p); }
+  }else bubble(text,"me");
+
+  // API送信内容を組み立て
+  let content, histText;
+  if(pendingImage){
+    content=[
+      {type:"image",source:{type:"base64",media_type:pendingImage.mediaType,data:pendingImage.base64}},
+      {type:"text",text: text || "この画像に含まれるタスク・予定を抽出して登録してください。"}
+    ];
+    histText = text? text+"（画像を添付）" : "（画像を添付してタスク抽出を依頼）";
+  }else{
+    content=text; histText=text;
+  }
+  clearImage();
   inputEl.value=""; autosize();
   busy=true; sendEl.disabled=true; typing(true);
 
   try{
-    const raw=await callClaude(text, history);
+    const raw=await callClaude(content, history);
     let parsed;
     try{ parsed=parseJSON(raw); }
     catch(e){ parsed={reply:raw||"うまく解釈できませんでした。言い換えてもらえますか？", actions:[]}; }
@@ -471,7 +523,7 @@ async function handleSend(){
     const {count:n, errors}=await applyActions(parsed.actions);
     render();
 
-    history.push({role:"user",content:text});
+    history.push({role:"user",content:histText});
     history.push({role:"assistant",content:JSON.stringify({reply:parsed.reply,actions:parsed.actions||[]})});
     while(history.length>12) history.shift();
 
@@ -493,6 +545,20 @@ inputEl.addEventListener("keydown",e=>{
   if(e.key==="Enter" && (e.metaKey||e.ctrlKey)){ e.preventDefault(); handleSend(); }
 });
 sendEl.onclick=handleSend;
+
+/* ====== 画像添付 ====== */
+const fileInput=document.getElementById("fileInput");
+document.getElementById("attach").onclick=()=>fileInput.click();
+fileInput.onchange=async()=>{
+  const f=fileInput.files[0]; fileInput.value="";
+  if(!f) return;
+  try{
+    pendingImage=await processImageFile(f);
+    document.getElementById("imgThumb").src=pendingImage.dataUrl;
+    document.getElementById("imgPreview").style.display="flex";
+  }catch(e){ bubble("画像の読み込みに失敗しました。別の画像でお試しください。","sys"); }
+};
+document.getElementById("imgRemove").onclick=clearImage;
 
 /* ====== 設定モーダル ====== */
 const mask=document.getElementById("settingsMask");
