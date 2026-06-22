@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>段取り秘書</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#f4f1ea; --panel:#fffdf8; --ink:#2f2a24; --sub:#8a8175;
+    --line:#e7e0d3; --accent:#7a6a53; --accent2:#b89b6e;
+    --me:#e9e2d2; --ai:#fffdf8; --danger:#c0573f; --ok:#5a8a5a;
+    --shadow:0 1px 3px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.05);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic",Meiryo,sans-serif;
+    line-height:1.6;
+  }
+  .app{display:flex;height:100dvh;max-width:1100px;margin:0 auto}
+  /* 盤面 */
+  .board{
+    width:42%;min-width:300px;background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  .board-head{padding:18px 18px 12px;border-bottom:1px solid var(--line)}
+  .board-head h1{margin:0;font-size:17px;letter-spacing:.04em}
+  .board-head .date{color:var(--sub);font-size:13px;margin-top:2px}
+  .board-scroll{overflow-y:auto;padding:8px 14px 30px;flex:1}
+  .sec-title{font-size:12px;color:var(--sub);letter-spacing:.08em;margin:18px 4px 8px;font-weight:600}
+  .card{
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:11px 12px;margin-bottom:8px;
+    box-shadow:0 1px 2px rgba(0,0,0,.03);display:flex;gap:10px;align-items:flex-start;
+  }
+  .card.done{opacity:.5}
+  .card.overdue{border-color:#e7c4b8;background:#fdf6f3}
+  .card.today{border-left:3px solid var(--accent2)}
+  .chk{
+    width:20px;height:20px;border-radius:6px;border:1.6px solid var(--accent2);flex:0 0 auto;
+    margin-top:2px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;
+  }
+  .chk.on{background:var(--accent2)}
+  .card-body{flex:1;min-width:0}
+  .card-title{font-size:14.5px;word-break:break-word}
+  .card.done .card-title{text-decoration:line-through}
+  .card-meta{font-size:12px;color:var(--sub);margin-top:2px}
+  .card-meta .od{color:var(--danger);font-weight:600}
+  .del{color:var(--sub);cursor:pointer;font-size:16px;padding:0 2px;flex:0 0 auto;line-height:1}
+  .del:hover{color:var(--danger)}
+  .empty{color:var(--sub);font-size:13px;padding:6px 4px}
+  /* チャット */
+  .chat{flex:1;display:flex;flex-direction:column;background:var(--bg);min-width:0}
+  .chat-head{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+  .chat-head .t{font-size:15px;font-weight:600}
+  .gear{cursor:pointer;color:var(--sub);font-size:19px;background:none;border:none;padding:4px}
+  .msgs{flex:1;overflow-y:auto;padding:18px 16px 8px;display:flex;flex-direction:column;gap:10px}
+  .msg{max-width:84%;padding:10px 13px;border-radius:14px;font-size:14.5px;white-space:pre-wrap;word-break:break-word;box-shadow:var(--shadow)}
+  .msg.ai{background:var(--ai);border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
+  .msg.me{background:var(--me);align-self:flex-end;border-bottom-right-radius:4px}
+  .msg.sys{align-self:center;background:transparent;box-shadow:none;color:var(--sub);font-size:12.5px;text-align:center}
+  .typing{align-self:flex-start;color:var(--sub);font-size:13px;padding:4px 8px}
+  .composer{padding:10px 12px 14px;border-top:1px solid var(--line);background:var(--panel)}
+  .composer .row{display:flex;gap:8px;align-items:flex-end}
+  textarea{
+    flex:1;resize:none;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font:inherit;
+    background:#fff;max-height:140px;min-height:44px;line-height:1.5;
+  }
+  textarea:focus{outline:none;border-color:var(--accent2)}
+  .send{
+    background:var(--accent);color:#fff;border:none;border-radius:12px;padding:0 16px;height:44px;
+    font-size:14px;cursor:pointer;flex:0 0 auto;font-weight:600;
+  }
+  .send:disabled{opacity:.4;cursor:default}
+  .hint{font-size:11.5px;color:var(--sub);margin:6px 2px 0}
+  /* 設定モーダル */
+  .mask{position:fixed;inset:0;background:rgba(40,35,28,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:50}
+  .mask.on{display:flex}
+  .modal{background:var(--panel);border-radius:16px;max-width:440px;width:100%;padding:22px;box-shadow:var(--shadow);max-height:90dvh;overflow-y:auto}
+  .modal h2{margin:0 0 4px;font-size:17px}
+  .modal p.lead{margin:0 0 16px;color:var(--sub);font-size:13px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:13px;font-weight:600;margin-bottom:4px}
+  .field .desc{font-size:11.5px;color:var(--sub);margin-bottom:6px}
+  .field input{width:100%;border:1px solid var(--line);border-radius:10px;padding:9px 11px;font:inherit;background:#fff}
+  .field input:focus{outline:none;border-color:var(--accent2)}
+  .modal .actions{display:flex;gap:8px;margin-top:8px}
+  .btn{flex:1;border-radius:10px;padding:10px;font-size:14px;cursor:pointer;border:1px solid var(--line);background:#fff;font-weight:600}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .sync-tag{font-size:11px;color:var(--sub)}
+  .sync-tag b{color:var(--ok)}
+  @media(max-width:760px){
+    .app{flex-direction:column}
+    .board{width:100%;min-width:0;max-height:46dvh;border-right:none;border-bottom:1px solid var(--line)}
+    .chat{min-height:54dvh}
+    .msg{max-width:90%}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 盤面 -->
+  <aside class="board">
+    <div class="board-head">
+      <h1>今日の盤面</h1>
+      <div class="date" id="todayLabel"></div>
+    </div>
+    <div class="board-scroll">
+      <div class="sec-title">予定</div>
+      <div id="eventsList"></div>
+      <div class="sec-title">タスク</div>
+      <div id="tasksList"></div>
+    </div>
+  </aside>
+
+  <!-- チャット -->
+  <section class="chat">
+    <div class="chat-head">
+      <div class="t">段取り秘書</div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="sync-tag" id="syncTag"></span>
+        <button class="gear" id="openSettings" title="設定">⚙︎</button>
+      </div>
+    </div>
+    <div class="msgs" id="msgs"></div>
+    <div class="composer">
+      <div class="row">
+        <textarea id="input" placeholder="例：明日15時に田中さんと面談、資料準備"></textarea>
+        <button class="send" id="send">送信</button>
+      </div>
+      <div class="hint">話し言葉でOK。「今日どうしたら？」で段取り相談に乗ります。</div>
+    </div>
+  </section>
+</div>
+
+<!-- 設定 -->
+<div class="mask" id="settingsMask">
+  <div class="modal">
+    <h2>設定</h2>
+    <p class="lead">この端末だけに保存されます（APIキーは外部に出ません）。</p>
+    <div class="field">
+      <label>Claude APIキー <span style="color:var(--danger)">※必須</span></label>
+      <div class="desc">console.anthropic.com で発行（sk-ant-… で始まる文字列）</div>
+      <input id="setClaudeKey" type="password" placeholder="sk-ant-...">
+    </div>
+    <div class="field">
+      <label>Supabase URL <span class="sync-tag">（同期したい場合のみ）</span></label>
+      <div class="desc">空のままだと、この端末内だけに保存します</div>
+      <input id="setSupaUrl" type="text" placeholder="https://xxxx.supabase.co">
+    </div>
+    <div class="field">
+      <label>Supabase anonキー</label>
+      <input id="setSupaKey" type="password" placeholder="eyJhbGci...">
+    </div>
+    <div class="actions">
+      <button class="btn" id="cancelSettings">閉じる</button>
+      <button class="btn primary" id="saveSettings">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ====== モデル設定（質に不満が出たらここを差し替え）====== */
+const MODEL = "claude-haiku-4-5"; // 上げる場合: "claude-sonnet-4-6"
+
+/* ====== 設定の読み書き ====== */
+const LS = {
+  claudeKey:"sec_claude_key",
+  supaUrl:"sec_supa_url",
+  supaKey:"sec_supa_key",
+  localTasks:"sec_local_tasks",
+  localEvents:"sec_local_events",
+};
+const cfg = {
+  claudeKey: localStorage.getItem(LS.claudeKey) || "",
+  supaUrl:   localStorage.getItem(LS.supaUrl)   || "",
+  supaKey:   localStorage.getItem(LS.supaKey)   || "",
+};
+
+let supa = null;
+function initSupa(){
+  if(cfg.supaUrl && cfg.supaKey && window.supabase){
+    try{ supa = window.supabase.createClient(cfg.supaUrl, cfg.supaKey); }
+    catch(e){ supa = null; }
+  } else supa = null;
+  updateSyncTag();
+}
+function updateSyncTag(){
+  const el = document.getElementById("syncTag");
+  el.innerHTML = supa ? "同期 <b>ON</b>" : "この端末のみ";
+}
+
+/* ====== データ層（Supabase or localStorage）====== */
+let tasks = [];   // {id,title,due_date,done,created_at}
+let events = [];  // {id,title,start_at,note,created_at}
+
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+async function loadData(){
+  if(supa){
+    const [t,e] = await Promise.all([
+      supa.from("tasks").select("*").order("created_at"),
+      supa.from("events").select("*").order("start_at"),
+    ]);
+    if(t.error) throw new Error("Supabase tasks読込: "+t.error.message);
+    if(e.error) throw new Error("Supabase events読込: "+e.error.message);
+    tasks  = t.data || [];
+    events = e.data || [];
+  }else{
+    tasks  = JSON.parse(localStorage.getItem(LS.localTasks)  || "[]");
+    events = JSON.parse(localStorage.getItem(LS.localEvents) || "[]");
+  }
+}
+function saveLocal(){
+  localStorage.setItem(LS.localTasks,  JSON.stringify(tasks));
+  localStorage.setItem(LS.localEvents, JSON.stringify(events));
+}
+
+async function addTask(o){
+  const row = {id:uid(), title:o.title, due_date:o.due_date||null, done:false, created_at:new Date().toISOString()};
+  if(supa){ const {data,error}=await supa.from("tasks").insert(row).select().single(); if(error) throw new Error("Supabase tasks挿入: "+error.message+(error.hint?" / "+error.hint:"")); tasks.push(data||row); }
+  else { tasks.push(row); saveLocal(); }
+}
+async function addEvent(o){
+  const row = {id:uid(), title:o.title, start_at:o.start_at||null, note:o.note||null, created_at:new Date().toISOString()};
+  if(supa){ const {data,error}=await supa.from("events").insert(row).select().single(); if(error) throw new Error("Supabase events挿入: "+error.message+(error.hint?" / "+error.hint:"")); events.push(data||row); }
+  else { events.push(row); saveLocal(); }
+}
+async function setTaskDone(id, done){
+  const t = tasks.find(x=>x.id==id); if(!t) return;
+  t.done = done;
+  if(supa){ const {error}=await supa.from("tasks").update({done}).eq("id",id); if(error) throw new Error("Supabase tasks更新: "+error.message); }
+  else saveLocal();
+}
+async function delTask(id){
+  tasks = tasks.filter(x=>x.id!=id);
+  if(supa){ const {error}=await supa.from("tasks").delete().eq("id",id); if(error) throw new Error("Supabase tasks削除: "+error.message); }
+  else saveLocal();
+}
+async function delEvent(id){
+  events = events.filter(x=>x.id!=id);
+  if(supa){ const {error}=await supa.from("events").delete().eq("id",id); if(error) throw new Error("Supabase events削除: "+error.message); }
+  else saveLocal();
+}
+
+/* ====== 日付ユーティリティ ====== */
+function pad(n){return String(n).padStart(2,"0")}
+function todayStr(){ const d=new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+const WD=["日","月","火","水","木","金","土"];
+function fmtDate(s){
+  if(!s) return "";
+  const d=new Date(s.length<=10? s+"T00:00:00": s);
+  if(isNaN(d)) return s;
+  return `${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})`;
+}
+function fmtDateTime(s){
+  if(!s) return "";
+  const d=new Date(s); if(isNaN(d)) return s;
+  return `${fmtDate(s)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function dayKey(s){
+  if(!s) return "";
+  const d=new Date(s.length<=10? s+"T00:00:00": s);
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function isPast(s){ // 日時が過去か（日付のみは当日0時基準で前日まで）
+  if(!s) return false;
+  const now=new Date();
+  const d=new Date(s.length<=10? s+"T23:59:59": s);
+  return d < now;
+}
+
+/* ====== 描画 ====== */
+function render(){
+  document.getElementById("todayLabel").textContent =
+    new Date().toLocaleDateString("ja-JP",{month:"long",day:"numeric",weekday:"long"});
+
+  // 予定（日時順、過去は末尾だが表示は残す）
+  const ev = [...events].sort((a,b)=> (a.start_at||"")<(b.start_at||"")? -1:1);
+  const evEl = document.getElementById("eventsList");
+  evEl.innerHTML = ev.length? "" : '<div class="empty">予定はありません</div>';
+  const tk = todayStr();
+  ev.forEach(e=>{
+    const today = dayKey(e.start_at)===tk;
+    const past = isPast(e.start_at);
+    const div=document.createElement("div");
+    div.className="card"+(today?" today":"")+(past?" overdue":"");
+    div.innerHTML=`<div class="card-body">
+        <div class="card-title">${esc(e.title)}</div>
+        <div class="card-meta">${e.start_at?fmtDateTime(e.start_at):"日時未定"}${e.note?" ・ "+esc(e.note):""}</div>
+      </div>
+      <span class="del" title="削除">✕</span>`;
+    div.querySelector(".del").onclick=async()=>{ if(confirm("この予定を削除しますか？")){ await delEvent(e.id); render(); } };
+    evEl.appendChild(div);
+  });
+
+  // タスク（未完了→完了、期限順）
+  const sorted=[...tasks].sort((a,b)=>{
+    if(a.done!==b.done) return a.done?1:-1;
+    return (a.due_date||"9999")<(b.due_date||"9999")? -1:1;
+  });
+  const tkEl=document.getElementById("tasksList");
+  tkEl.innerHTML = sorted.length? "" : '<div class="empty">タスクはありません</div>';
+  sorted.forEach(t=>{
+    const today = t.due_date && dayKey(t.due_date)===tk;
+    const overdue = !t.done && t.due_date && isPast(t.due_date) && !today;
+    const div=document.createElement("div");
+    div.className="card"+(t.done?" done":"")+(today?" today":"")+(overdue?" overdue":"");
+    div.innerHTML=`<div class="chk ${t.done?"on":""}">${t.done?"✓":""}</div>
+      <div class="card-body">
+        <div class="card-title">${esc(t.title)}</div>
+        <div class="card-meta">${t.due_date? (overdue?'<span class="od">期限切れ </span>':"")+"〆 "+fmtDate(t.due_date) : "期限なし"}</div>
+      </div>
+      <span class="del" title="削除">✕</span>`;
+    div.querySelector(".chk").onclick=async()=>{ await setTaskDone(t.id,!t.done); render(); };
+    div.querySelector(".del").onclick=async()=>{ if(confirm("このタスクを削除しますか？")){ await delTask(t.id); render(); } };
+    tkEl.appendChild(div);
+  });
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+
+/* ====== チャットUI ====== */
+const msgsEl=document.getElementById("msgs");
+function bubble(text, who){
+  const d=document.createElement("div");
+  d.className="msg "+who;
+  d.textContent=text;
+  msgsEl.appendChild(d);
+  msgsEl.scrollTop=msgsEl.scrollHeight;
+  return d;
+}
+function typing(on){
+  let t=document.getElementById("typingEl");
+  if(on){ if(!t){ t=document.createElement("div"); t.id="typingEl"; t.className="typing"; t.textContent="考えています…"; msgsEl.appendChild(t); msgsEl.scrollTop=msgsEl.scrollHeight; } }
+  else if(t) t.remove();
+}
+
+/* 起動時の全体像（ローカル生成・APIを使わず即提示）*/
+function openingMessage(){
+  const tk=todayStr();
+  const todayEv = events.filter(e=>dayKey(e.start_at)===tk).sort((a,b)=>(a.start_at||"")<(b.start_at||"")?-1:1);
+  const overdueTasks = tasks.filter(t=>!t.done && t.due_date && isPast(t.due_date) && dayKey(t.due_date)!==tk);
+  const todayTasks = tasks.filter(t=>!t.done && t.due_date && dayKey(t.due_date)===tk);
+  const openTasks = tasks.filter(t=>!t.done);
+
+  const hour=new Date().getHours();
+  const greet = hour<11?"おはようございます。":hour<18?"こんにちは。":"お疲れさまです。";
+  let lines=[greet];
+  if(todayEv.length){
+    lines.push(`今日の予定は${todayEv.length}件です。`);
+    todayEv.forEach(e=>lines.push(`　・${pad(new Date(e.start_at).getHours())}:${pad(new Date(e.start_at).getMinutes())} ${e.title}`));
+  }else{
+    lines.push("今日に入っている予定はありません。");
+  }
+  if(overdueTasks.length) lines.push(`⚠️ 期限切れのタスクが${overdueTasks.length}件あります。`);
+  if(todayTasks.length) lines.push(`今日が期限のタスクが${todayTasks.length}件。`);
+  lines.push(`未完了タスクは全部で${openTasks.length}件です。`);
+  lines.push("\n何か追加・整理しますか？「今日どうしたら？」で段取りも相談できます。");
+  return lines.join("\n");
+}
+
+/* ====== Claude 呼び出し ====== */
+function systemPrompt(){
+  const now=new Date();
+  const nowStr=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} (${WD[now.getDay()]}) ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const taskCtx=tasks.map(t=>`- [${t.done?"済":"未"}] id=${t.id} 「${t.title}」${t.due_date?" 〆"+t.due_date:""}`).join("\n")||"（なし）";
+  const evCtx=events.map(e=>`- id=${e.id} 「${e.title}」${e.start_at?" "+e.start_at:" 日時未定"}${e.note?" / "+e.note:""}`).join("\n")||"（なし）";
+  return `あなたは塾長・大橋場さん専用の段取り秘書です。普段は整理係に徹し、簡潔で落ち着いた敬語で話します。聞かれた時だけ段取りの相談に乗ります。
+
+現在日時: ${nowStr}
+
+# 現在のタスク
+${taskCtx}
+
+# 現在の予定
+${evCtx}
+
+# あなたの仕事
+ユーザーの話し言葉を解釈し、タスク/予定の追加・完了・削除を判断して、必ず次のJSONだけを出力してください（前後に文章やコードブロック記号を付けない）。
+
+{
+  "reply": "ユーザーへの短い返答（敬語）",
+  "actions": [
+    {"type":"add_task","title":"...","due_date":"YYYY-MM-DD または null"},
+    {"type":"add_event","title":"...","start_at":"YYYY-MM-DDTHH:MM","note":"... または null"},
+    {"type":"complete_task","id":"既存のid"},
+    {"type":"delete_task","id":"既存のid"},
+    {"type":"delete_event","id":"既存のid"}
+  ]
+}
+
+# ルール
+- 日付/時刻は現在日時を基準に具体的なISO形式へ変換する（例「明日15時」→ 翌日のT15:00）。
+- 「面談」「授業」「打合せ」など時刻のある予定は add_event、「資料準備」「電話する」など作業は add_task。1つの発言から複数生成してよい。
+- 期限のないタスクは due_date を null。
+- ★曖昧な入力（「来週あたり」「夕方」「近いうち」など日時が特定できない）は、勝手に確定させず actions を空配列にして、reply で1点だけ聞き返す。
+- 完了/削除はユーザーが明確にそう言った時のみ。対象は上記idから選ぶ。該当が曖昧なら聞き返す。
+- 「今日どうしたら」等の相談は actions を空にし、現在の予定・タスクを踏まえて優先順位を助言する。
+- reply は常に日本語。JSON以外は一切出力しない。`;
+}
+
+async function callClaude(userText, history){
+  const body={
+    model:MODEL, max_tokens:1024,
+    system:systemPrompt(),
+    messages:[...history, {role:"user",content:userText}],
+  };
+  const res=await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{
+      "content-type":"application/json",
+      "x-api-key":cfg.claudeKey,
+      "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-direct-browser-access":"true",
+    },
+    body:JSON.stringify(body),
+  });
+  if(!res.ok){
+    const txt=await res.text();
+    throw new Error(`API ${res.status}: ${txt.slice(0,200)}`);
+  }
+  const data=await res.json();
+  return (data.content||[]).map(c=>c.text||"").join("");
+}
+function parseJSON(raw){
+  let s=raw.trim();
+  s=s.replace(/^```(json)?/i,"").replace(/```$/,"").trim();
+  const i=s.indexOf("{"), j=s.lastIndexOf("}");
+  if(i>=0&&j>=0) s=s.slice(i,j+1);
+  return JSON.parse(s);
+}
+
+async function applyActions(actions){
+  let count=0; const errors=[];
+  for(const a of (actions||[])){
+    try{
+      if(a.type==="add_task"){ await addTask({title:a.title, due_date:a.due_date}); count++; }
+      else if(a.type==="add_event"){ await addEvent({title:a.title, start_at:a.start_at, note:a.note}); count++; }
+      else if(a.type==="complete_task"){ await setTaskDone(a.id,true); count++; }
+      else if(a.type==="delete_task"){ await delTask(a.id); count++; }
+      else if(a.type==="delete_event"){ await delEvent(a.id); count++; }
+    }catch(e){ errors.push(e.message); }
+  }
+  return {count, errors};
+}
+
+/* ====== 会話制御 ====== */
+const history=[]; // Claudeに渡す会話履歴（軽量）
+let busy=false;
+const inputEl=document.getElementById("input");
+const sendEl=document.getElementById("send");
+
+async function handleSend(){
+  const text=inputEl.value.trim();
+  if(!text||busy) return;
+  if(!cfg.claudeKey){ openSettings(); bubble("先にClaude APIキーを設定してください（⚙︎）。","sys"); return; }
+
+  bubble(text,"me");
+  inputEl.value=""; autosize();
+  busy=true; sendEl.disabled=true; typing(true);
+
+  try{
+    const raw=await callClaude(text, history);
+    let parsed;
+    try{ parsed=parseJSON(raw); }
+    catch(e){ parsed={reply:raw||"うまく解釈できませんでした。言い換えてもらえますか？", actions:[]}; }
+
+    const {count:n, errors}=await applyActions(parsed.actions);
+    render();
+
+    history.push({role:"user",content:text});
+    history.push({role:"assistant",content:JSON.stringify({reply:parsed.reply,actions:parsed.actions||[]})});
+    while(history.length>12) history.shift();
+
+    typing(false);
+    bubble(parsed.reply || (n?`${n}件、盤面に反映しました。`:"承知しました。"), "ai");
+    if(errors.length) bubble("⚠️ 保存エラー:\n"+errors.join("\n"), "sys");
+  }catch(err){
+    typing(false);
+    bubble("エラー: "+err.message+"\n（APIキー・通信・モデル名をご確認ください）","sys");
+  }finally{
+    busy=false; sendEl.disabled=false; inputEl.focus();
+  }
+}
+
+/* ====== 入力欄 ====== */
+function autosize(){ inputEl.style.height="auto"; inputEl.style.height=Math.min(inputEl.scrollHeight,140)+"px"; }
+inputEl.addEventListener("input",autosize);
+inputEl.addEventListener("keydown",e=>{
+  if(e.key==="Enter" && (e.metaKey||e.ctrlKey)){ e.preventDefault(); handleSend(); }
+});
+sendEl.onclick=handleSend;
+
+/* ====== 設定モーダル ====== */
+const mask=document.getElementById("settingsMask");
+function openSettings(){
+  document.getElementById("setClaudeKey").value=cfg.claudeKey;
+  document.getElementById("setSupaUrl").value=cfg.supaUrl;
+  document.getElementById("setSupaKey").value=cfg.supaKey;
+  mask.classList.add("on");
+}
+document.getElementById("openSettings").onclick=openSettings;
+document.getElementById("cancelSettings").onclick=()=>mask.classList.remove("on");
+document.getElementById("saveSettings").onclick=async()=>{
+  cfg.claudeKey=document.getElementById("setClaudeKey").value.trim();
+  cfg.supaUrl  =document.getElementById("setSupaUrl").value.trim();
+  cfg.supaKey  =document.getElementById("setSupaKey").value.trim();
+  localStorage.setItem(LS.claudeKey,cfg.claudeKey);
+  localStorage.setItem(LS.supaUrl,cfg.supaUrl);
+  localStorage.setItem(LS.supaKey,cfg.supaKey);
+  mask.classList.remove("on");
+  initSupa();
+  try{ await loadData(); }
+  catch(err){ bubble("⚠️ 接続エラー: "+err.message+"\n（URL/キーをご確認ください）","sys"); }
+  render();
+  bubble("設定を保存しました。"+(supa?"（同期ON）":"（この端末のみ）"),"sys");
+};
+
+/* ====== 起動 ====== */
+(async function start(){
+  initSupa();
+  try{ await loadData(); }
+  catch(err){ bubble("⚠️ 接続エラー: "+err.message,"sys"); }
+  render();
+  if(!cfg.claudeKey){
+    bubble("ようこそ。まず⚙︎からClaude APIキーを設定してください。","ai");
+  }else{
+    bubble(openingMessage(),"ai");
+  }
+})();
+</script>
+</body>
+</html>
